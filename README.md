@@ -289,14 +289,13 @@ Handled errors:
 ## Screenshots
 
 Books page:
-![Books page] (frontend/docs/books-page.png)
+![Books page](frontend/docs/books-page.png)
 
 Book detail page + review:
-![Book detail page + review] (frontend/docs/book-detail-page.png)
+![Book detail page + review](frontend/docs/book-detail-page.png)
 
 Book form:
-![Book form] (frontend/docs/book-form.png)
+![Book form](frontend/docs/book-form.png)
 
 Swagger:
-![Swagger] (frontend/docs/swagger.png)
-
+![Swagger](frontend/docs/swagger.png)
