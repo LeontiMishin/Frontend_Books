@@ -196,6 +196,10 @@ export function BookFormPage({ mode }: BookFormPageProps) {
         throw new Error('Author and publisher are required.');
       }
 
+      if (payload.genreIds.length === 0) {
+        throw new Error('Select at least one genre.');
+      }
+
       const book = isEdit ? await updateBook(bookId, payload) : await createBook(payload);
       navigate(book.id > 0 ? `/books/${book.id}` : '/books');
     } catch (error) {

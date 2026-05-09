@@ -43,10 +43,19 @@ npm install
 cp .env.example .env
 ```
 
-3. Set API URL in `.env`:
+3. Set API URL and proxy target in `.env`:
 
 ```env
-VITE_API_URL=http://localhost:3000/api/v1
+VITE_API_URL=/api/v1
+VITE_API_PROXY_TARGET=http://localhost:3000
+```
+
+4. Start the backend API before launching the frontend:
+
+```bash
+cd ../REST_API_and_Books/REST_API_and_Books
+npm install
+npm run dev
 ```
 
 ## Run commands

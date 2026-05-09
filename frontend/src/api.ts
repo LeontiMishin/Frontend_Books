@@ -77,7 +77,7 @@ export interface PaginatedBooksResponse {
 }
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api/v1',
+  baseURL: import.meta.env.VITE_API_URL ?? '/api/v1',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -116,7 +116,11 @@ function normalizeNamedEntity(value: unknown): NamedEntity | null {
   }
 
   const id = readNumber(value, ['id'], 0);
-  const name = readString(value, ['name', 'title', 'label'], '');
+  const fallbackName = [readString(value, ['firstName']), readString(value, ['lastName'])]
+    .filter((part) => part.trim() !== '')
+    .join(' ')
+    .trim();
+  const name = readString(value, ['name', 'title', 'label'], fallbackName);
 
   if (id === 0 && name === '') {
     return null;
@@ -165,7 +169,7 @@ function normalizeBook(value: unknown): Book {
     description: readString(record, ['description', 'summary']),
     author: normalizeAuthor(record.author),
     publisher: normalizeNamedEntity(record.publisher),
-    genres: normalizeGenres(record.genres),
+    genres: normalizeGenres(record.genreDetails ?? record.genres),
   };
 }
 
@@ -174,7 +178,7 @@ function normalizeReview(value: unknown): Review {
 
   return {
     id: readNumber(record, ['id']),
-    username: readString(record, ['username', 'user', 'name']),
+    username: readString(record, ['username', 'userName', 'user', 'name']),
     rating: readNumber(record, ['rating']),
     comment: readString(record, ['comment', 'content', 'text']),
     createdAt: readString(record, ['createdAt'], ''),
@@ -226,7 +230,7 @@ function normalizePagination(payload: unknown, fallbackPage: number, fallbackLim
           ? nestedData.pagination
           : record;
   const page = readNumber(meta, ['page', 'currentPage'], fallbackPage);
-  const limit = readNumber(meta, ['limit', 'pageSize'], fallbackLimit);
+  const limit = readNumber(meta, ['limit', 'pageSize', 'itemsPerPage'], fallbackLimit);
   const total = readNumber(meta, ['total', 'totalItems', 'count'], itemCount);
   const totalPages = readNumber(meta, ['totalPages', 'pageCount'], Math.max(1, Math.ceil(total / Math.max(limit, 1))));
 
@@ -242,18 +246,76 @@ function buildBookMutationPayload(input: BookMutationInput) {
   return {
     title: input.title,
     isbn: input.isbn,
+    publishedYear: input.year,
     year: input.year,
+    pageCount: input.pageCount,
     pages: input.pageCount,
     language: input.language,
     description: input.description,
     authorId: input.authorId,
     publisherId: input.publisherId,
+    genres: input.genreIds,
     genreIds: input.genreIds,
   };
 }
 
+function buildReviewMutationPayload(input: ReviewMutationInput) {
+  return {
+    username: input.username,
+    userName: input.username,
+    rating: input.rating,
+    comment: input.comment,
+  };
+}
+
+function extractLookupsFromBooks(items: Book[]) {
+  const authorsMap = new Map<number, Author>();
+  const publishersMap = new Map<number, Publisher>();
+  const genresMap = new Map<number, Genre>();
+
+  items.forEach((book) => {
+    if (book.author) {
+      authorsMap.set(book.author.id, book.author);
+    }
+
+    if (book.publisher) {
+      publishersMap.set(book.publisher.id, book.publisher);
+    }
+
+    book.genres.forEach((genre) => {
+      genresMap.set(genre.id, genre);
+    });
+  });
+
+  const byName = <T extends NamedEntity>(left: T, right: T) => left.name.localeCompare(right.name);
+
+  return {
+    authors: Array.from(authorsMap.values()).sort(byName),
+    publishers: Array.from(publishersMap.values()).sort(byName),
+    genres: Array.from(genresMap.values()).sort(byName),
+  };
+}
+
+async function getDerivedLookups(signal?: AbortSignal) {
+  const response = await getBooks(
+    {
+      page: 1,
+      limit: 100,
+      sortBy: 'title',
+      sortOrder: 'asc',
+    },
+    signal,
+  );
+
+  return extractLookupsFromBooks(response.items);
+}
+
 export function getErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
+    if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
+      return 'Cannot reach the API server. Start the backend and verify the frontend proxy/API URL settings.';
+    }
+
     const responseData = error.response?.data;
 
     if (typeof responseData === 'string' && responseData.trim() !== '') {
@@ -286,7 +348,7 @@ export async function getBooks(params: BooksQueryParams, signal?: AbortSignal): 
       year: params.year || undefined,
       language: params.language || undefined,
       publicationYear: params.year || undefined,
-      sortBy: params.sortBy,
+      sortBy: params.sortBy === 'year' ? 'publishedYear' : params.sortBy,
       sortOrder: params.sortOrder,
       order: params.sortOrder,
       page: params.page,
@@ -341,7 +403,7 @@ export async function getReviews(bookId: number, signal?: AbortSignal): Promise<
 }
 
 export async function createReview(bookId: number, input: ReviewMutationInput): Promise<Review> {
-  const response = await api.post<unknown>(`/books/${bookId}/reviews`, input);
+  const response = await api.post<unknown>(`/books/${bookId}/reviews`, buildReviewMutationPayload(input));
   return normalizeReview(extractSingleValue(response.data));
 }
 
@@ -350,22 +412,37 @@ export async function deleteReview(reviewId: number): Promise<void> {
 }
 
 export async function getGenres(signal?: AbortSignal): Promise<Genre[]> {
-  const response = await api.get<unknown>('/genres', { signal });
-  return extractArray(response.data, ['genres', 'items', 'results', 'data'])
-    .map((genre) => normalizeNamedEntity(genre))
-    .filter((genre): genre is Genre => genre !== null);
+  try {
+    const response = await api.get<unknown>('/genres', { signal });
+    return extractArray(response.data, ['genres', 'items', 'results', 'data'])
+      .map((genre) => normalizeNamedEntity(genre))
+      .filter((genre): genre is Genre => genre !== null);
+  } catch {
+    const lookups = await getDerivedLookups(signal);
+    return lookups.genres;
+  }
 }
 
 export async function getAuthors(signal?: AbortSignal): Promise<Author[]> {
-  const response = await api.get<unknown>('/authors', { signal });
-  return extractArray(response.data, ['authors', 'items', 'results', 'data'])
-    .map((author) => normalizeAuthor(author))
-    .filter((author): author is Author => author !== null);
+  try {
+    const response = await api.get<unknown>('/authors', { signal });
+    return extractArray(response.data, ['authors', 'items', 'results', 'data'])
+      .map((author) => normalizeAuthor(author))
+      .filter((author): author is Author => author !== null);
+  } catch {
+    const lookups = await getDerivedLookups(signal);
+    return lookups.authors;
+  }
 }
 
 export async function getPublishers(signal?: AbortSignal): Promise<Publisher[]> {
-  const response = await api.get<unknown>('/publishers', { signal });
-  return extractArray(response.data, ['publishers', 'items', 'results', 'data'])
-    .map((publisher) => normalizeNamedEntity(publisher))
-    .filter((publisher): publisher is Publisher => publisher !== null);
+  try {
+    const response = await api.get<unknown>('/publishers', { signal });
+    return extractArray(response.data, ['publishers', 'items', 'results', 'data'])
+      .map((publisher) => normalizeNamedEntity(publisher))
+      .filter((publisher): publisher is Publisher => publisher !== null);
+  } catch {
+    const lookups = await getDerivedLookups(signal);
+    return lookups.publishers;
+  }
 }
